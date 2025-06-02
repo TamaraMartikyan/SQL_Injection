@@ -1,157 +1,226 @@
 #include <iostream>
-#include <windows.h>
-#include <sqlext.h>
-#include <sqltypes.h>
-#include <sql.h>
+ 
 #include <string>
 #include <vector>
 #include <iomanip>
 #include <sstream>
 #include <ctime>
 #include <fstream>
+#include <algorithm>
+#include <map>
+using namespace std;
+
+// User structure to simulate database records
+struct User {
+    int user_id;
+    string username;
+    string password;
+    string email;
+    string role;
+};
+
+// Global user database (in-memory)
+vector<User> users = {
+    {1, "admin", "admin123", "admin@example.com", "administrator"},
+    {2, "john", "password123", "john@example.com", "user"},
+    {3, "alice", "secure456", "alice@example.com", "user"},
+    {4, "bob", "bob789", "bob@example.com", "user"},
+    {5, "sarah", "sarah123", "sarah@example.com", "manager"}
+};
 
 // Helper function declarations
-void displaySQLError(SQLHANDLE handle, SQLSMALLINT type);
-bool logAttempt(const std::string& username, bool success, const std::string& errorMsg = "");
-void runSecureQuery(SQLHDBC dbc);
-void runVulnerableQuery(SQLHDBC dbc);
-void showUserData(SQLHSTMT stmt);
+bool logAttempt(const string& username, bool success, const string& errorMsg = "");
+void runSecureQuery();
+void runVulnerableQuery();
+void showUserData(const vector<User>& results);
 void displayMenu();
-bool validateInput(const std::string& input);
+bool validateInput(const string& input);
+
+// Simulated SQL query execution - vulnerable version
+vector<User> executeVulnerableQuery(const string& query) {
+    vector<User> results;
+    cout << "Executing query: " << query << endl;
+
+    // Convert query to lowercase for easier parsing
+    string lowerQuery = query;
+    transform(lowerQuery.begin(), lowerQuery.end(), lowerQuery.begin(), ::tolower);
+
+    // Simple SQL parser to simulate SQL injection vulnerabilities
+
+    // Check for login query
+    if (lowerQuery.find("select") != string::npos &&
+        lowerQuery.find("from users where") != string::npos) {
+
+        // Extract conditions after WHERE
+        size_t wherePos = lowerQuery.find("where");
+        string conditions = lowerQuery.substr(wherePos + 5);
+
+        // Handle SQL injection like ' or '1'='1
+        if (conditions.find("'1'='1") != string::npos ||
+            conditions.find("1=1") != string::npos) {
+            // SQL injection detected - return all users
+            return users;
+        }
+
+        // Handle normal username/password check
+        for (const auto& user : users) {
+            // Very simplified check - in a real parser this would be much more complex
+            if (query.find(user.username) != string::npos &&
+                query.find(user.password) != string::npos) {
+                results.push_back(user);
+                return results;
+            }
+
+            // Check for comment injection (-- or #)
+            if (query.find("--") != string::npos || query.find("#") != string::npos) {
+                size_t usernamePos = query.find(user.username);
+                if (usernamePos != string::npos) {
+                    // Username found and password check commented out
+                    results.push_back(user);
+                    return results;
+                }
+            }
+        }
+    }
+    // Handle LIKE queries for search functionality
+    else if (lowerQuery.find("select") != string::npos &&
+        lowerQuery.find("like") != string::npos) {
+
+        // Extract search term
+        size_t likePos = lowerQuery.find("like");
+        string searchCondition = lowerQuery.substr(likePos + 4);
+
+        // Handle SQL injection
+        if (searchCondition.find("'1'='1") != string::npos ||
+            searchCondition.find("1=1") != string::npos) {
+            // SQL injection detected - return all users
+            return users;
+        }
+
+        // Extract actual search term between percentage signs
+        size_t firstQuote = searchCondition.find("'%");
+        size_t lastQuote = searchCondition.find("%'");
+
+        if (firstQuote != string::npos && lastQuote != string::npos) {
+            string searchTerm = searchCondition.substr(firstQuote + 2, lastQuote - firstQuote - 2);
+
+            // Perform the search
+            for (const auto& user : users) {
+                if (user.username.find(searchTerm) != string::npos ||
+                    user.email.find(searchTerm) != string::npos) {
+                    results.push_back(user);
+                }
+            }
+        }
+    }
+
+    return results;
+}
+
+// Simulated SQL query execution - secure parameterized version
+vector<User> executeSecureQuery(const string& queryTemplate, const map<int, string>& params) {
+    vector<User> results;
+
+    cout << "Executing parameterized query with template: " << queryTemplate << endl;
+    cout << "Parameters: ";
+    for (const auto& param : params) {
+        cout << param.first << " = '" << param.second << "' ";
+    }
+    cout << endl;
+
+    // Handle login query
+    if (queryTemplate.find("SELECT user_id, username, role FROM users WHERE") != string::npos) {
+        if (params.find(1) != params.end() && params.find(2) != params.end()) {
+            string username = params.at(1);
+            string password = params.at(2);
+
+            // Exact match required - no SQL injection possible
+            for (const auto& user : users) {
+                if (user.username == username && user.password == password) {
+                    results.push_back(user);
+                    return results;
+                }
+            }
+        }
+    }
+    // Handle search query
+    else if (queryTemplate.find("SELECT user_id, username, email, role FROM users") != string::npos) {
+        if (params.find(1) != params.end()) {
+            string searchTerm = params.at(1);
+
+            // Remove wildcards from parameter for demonstration
+            searchTerm = searchTerm.substr(1, searchTerm.length() - 2); // Remove % %
+
+            // Clean search - no SQL injection possible
+            for (const auto& user : users) {
+                if (user.username.find(searchTerm) != string::npos ||
+                    user.email.find(searchTerm) != string::npos) {
+                    results.push_back(user);
+                }
+            }
+        }
+    }
+
+    return results;
+}
 
 int main() {
-    // Database connection objects
-    SQLHENV env;      // Environment handle
-    SQLHDBC dbc;      // Connection handle
-    SQLHSTMT stmt;    // Statement handle
-    SQLRETURN ret;    // Return value from ODBC functions
-
     // User credentials
-    std::string username, password;
+    string username, password;
     bool isLoggedIn = false;
     int loginAttempts = 0;
     const int MAX_ATTEMPTS = 3;
 
-    std::cout << "=================================================\n";
-    std::cout << "DATABASE AUTHENTICATION SYSTEM - DEMONSTRATION\n";
-    std::cout << "=================================================\n";
-    std::cout << "This program demonstrates SQL injection vulnerabilities\n";
-    std::cout << "for educational purposes only.\n\n";
+    cout << "=================================================\n";
+    cout << "DATABASE AUTHENTICATION SYSTEM - DEMONSTRATION\n";
+    cout << "=================================================\n";
+    cout << "This program demonstrates SQL injection vulnerabilities\n";
+    cout << "for educational purposes only.\n\n";
 
-    // 1. Allocate environment handle
-    if (SQL_SUCCESS != SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env)) {
-        std::cout << "Failed to allocate environment handle.\n";
-        return 1;
-    }
-
-    // 2. Set ODBC version
-    if (SQL_SUCCESS != SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (void*)SQL_OV_ODBC3, 0)) {
-        std::cout << "Failed to set ODBC version.\n";
-        SQLFreeHandle(SQL_HANDLE_ENV, env);
-        return 1;
-    }
-
-    // 3. Allocate connection handle
-    if (SQL_SUCCESS != SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc)) {
-        std::cout << "Failed to allocate connection handle.\n";
-        SQLFreeHandle(SQL_HANDLE_ENV, env);
-        return 1;
-    }
-
-    // Connection string (in a real app, these credentials should never be hardcoded)
-    SQLWCHAR connStr[] = L"DSN=MyMSSQLServer;SERVER=localhost;DATABASE=Alvina;UID=Alvina;PWD=Al456852;";
-
-    // 4. Connect to the database
-    std::cout << "Connecting to database...\n";
-    ret = SQLDriverConnectW(dbc, NULL, connStr, SQL_NTS, NULL, 0, NULL, SQL_DRIVER_COMPLETE);
-
-    if (!SQL_SUCCEEDED(ret)) {
-        std::cout << "WARNING: Database connection failed.\n";
-        displaySQLError(dbc, SQL_HANDLE_DBC);
-        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
-        SQLFreeHandle(SQL_HANDLE_ENV, env);
-        return 1;
-    }
-
-    std::cout << "CONNECTED: Connected to database successfully.\n\n";
+    cout << "Note: Using in-memory simulated database\n\n";
 
     // Authentication loop
     while (loginAttempts < MAX_ATTEMPTS && !isLoggedIn) {
-        std::cout << "LOGIN SCREEN (Attempt " << loginAttempts + 1 << " of " << MAX_ATTEMPTS << ")\n";
-        std::cout << "Username: ";
-        getline(std::cin, username);
-        std::cout << "Password: ";
-        getline(std::cin, password);
-
-        // Allocate statement handle
-        SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
+        cout << "LOGIN SCREEN (Attempt " << loginAttempts + 1 << " of " << MAX_ATTEMPTS << ")\n";
+        cout << "Username: ";
+        getline(cin, username);
+        cout << "Password: ";
+        getline(cin, password);
 
         // VULNERABLE IMPLEMENTATION FOR DEMONSTRATION
         // This code is intentionally vulnerable to SQL injection
-        std::string queryStr = "SELECT user_id, username, role FROM users WHERE username = '"
+        string queryStr = "SELECT user_id, username, role FROM users WHERE username = '"
             + username + "' AND password = '" + password + "'";
 
-        // Display the raw query (for educational purposes)
-        std::cout << "\nExecuting query: " << queryStr << std::endl;
+        // Execute the simulated query
+        vector<User> results = executeVulnerableQuery(queryStr);
 
-        // Convert std::string to SQLWCHAR*
-        std::wstring wqueryStr(queryStr.begin(), queryStr.end());
-        SQLWCHAR* wquery = const_cast<SQLWCHAR*>(wqueryStr.c_str());
+        if (!results.empty()) {
+            isLoggedIn = true;
+            const User& user = results[0];
 
-        ret = SQLExecDirectW(stmt, wquery, SQL_NTS);
+            cout << "\nSUCCESS: Login successful!\n";
+            cout << "User ID: " << user.user_id << endl;
+            cout << "Username: " << user.username << endl;
+            cout << "Role: " << user.role << endl << endl;
 
-        if (SQL_SUCCEEDED(ret)) {
-            SQLLEN rowCount;
-            SQLRowCount(stmt, &rowCount);
+            // Log the successful login
+            logAttempt(username, true);
 
-            if (rowCount > 0) {
-                isLoggedIn = true;
-
-                // Display user information
-                SQLWCHAR userId[10], dbUsername[50], role[20];
-                SQLLEN lenUserId, lenUsername, lenRole;
-
-                // Bind result columns
-                SQLBindCol(stmt, 1, SQL_C_WCHAR, userId, sizeof(userId), &lenUserId);
-                SQLBindCol(stmt, 2, SQL_C_WCHAR, dbUsername, sizeof(dbUsername), &lenUsername);
-                SQLBindCol(stmt, 3, SQL_C_WCHAR, role, sizeof(role), &lenRole);
-
-                // Fetch and display user data
-                if (SQL_SUCCESS == SQLFetch(stmt)) {
-                    std::wcout << L"\nSUCCESS: Login successful!\n";
-                    std::wcout << L"User ID: " << userId << std::endl;
-                    std::wcout << L"Username: " << dbUsername << std::endl;
-                    std::wcout << L"Role: " << role << std::endl << std::endl;
-
-                    // Convert wide string to narrow for logging
-                    std::string narrowUsername(username.begin(), username.end());
-
-                    // Log the successful login
-                    logAttempt(narrowUsername, true);
-                }
-
-                // Note the vulnerability here: SQL injection could return multiple rows
-                // or could modify/delete data with the right injection string
-                if (SQL_SUCCESS == SQLFetch(stmt)) {
-                    std::cout << "WARNING: Multiple users match the criteria - possible SQL injection!\n";
-                }
-            }
-            else {
-                std::cout << "ERROR: Invalid username or password.\n\n";
-                logAttempt(username, false, "Invalid credentials");
+            // Note the vulnerability here: SQL injection could return multiple rows
+            if (results.size() > 1) {
+                cout << "WARNING: Multiple users match the criteria - possible SQL injection!\n";
             }
         }
         else {
-            std::cout << "ERROR: Query execution failed.\n";
-            displaySQLError(stmt, SQL_HANDLE_STMT);
-            logAttempt(username, false, "Query execution failure");
+            cout << "ERROR: Invalid username or password.\n\n";
+            logAttempt(username, false, "Invalid credentials");
         }
 
-        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
         loginAttempts++;
 
         if (!isLoggedIn && loginAttempts < MAX_ATTEMPTS) {
-            std::cout << "Please try again.\n\n";
+            cout << "Please try again.\n\n";
         }
     }
 
@@ -161,160 +230,82 @@ int main() {
 
         while (choice != 5) {
             displayMenu();
-            std::cout << "Enter your choice: ";
-            std::cin >> choice;
-            std::cin.ignore(); // Clear the newline
+            cout << "Enter your choice: ";
+            cin >> choice;
+            cin.ignore(); // Clear the newline
 
             // Common string variables to be used across cases
-            std::string searchTerm;
-            std::string queryStr;
-            std::string param;
-            std::wstring wQuery;
-            std::wstring wParam;
-
-            // Initialize safeQuery here to ensure it's available in all cases
-            // Using a dynamically allocated buffer to avoid the initialization issue
-            SQLWCHAR* safeQuery = nullptr;
-
-            // Declare these variables for all cases
-            SQLHSTMT localStmt = SQL_NULL_HSTMT;
-            char charChoice = 'n';
+            string searchTerm;
+            string queryStr;
 
             switch (choice) {
             case 1: // Vulnerable search
-                std::cout << "Enter search term: ";
-                getline(std::cin, searchTerm);
+                cout << "Enter search term: ";
+                getline(cin, searchTerm);
 
-                std::cout << "VULNERABLE QUERY - Demonstrating SQL Injection Risk\n";
-                std::cout << "-----------------------------------------------\n";
-
-                // Allocate statement handle
-                SQLAllocHandle(SQL_HANDLE_STMT, dbc, &localStmt);
+                cout << "VULNERABLE QUERY - Demonstrating SQL Injection Risk\n";
+                cout << "-----------------------------------------------\n";
 
                 // Create vulnerable query
                 queryStr = "SELECT user_id, username, email, role FROM users WHERE username LIKE '%"
                     + searchTerm + "%' OR email LIKE '%" + searchTerm + "%'";
 
-                std::cout << "Executing: " << queryStr << std::endl << std::endl;
-
-                // Convert to wide string
-                wQuery = std::wstring(queryStr.begin(), queryStr.end());
-
                 // Execute the query
-                ret = SQLExecDirectW(localStmt, const_cast<SQLWCHAR*>(wQuery.c_str()), SQL_NTS);
-
-                if (SQL_SUCCEEDED(ret)) {
-                    showUserData(localStmt);
-                }
-                else {
-                    displaySQLError(localStmt, SQL_HANDLE_STMT);
-                }
-
-                SQLFreeHandle(SQL_HANDLE_STMT, localStmt);
+                showUserData(executeVulnerableQuery(queryStr));
                 break;
 
             case 2: // Parameterized search (safe)
             {
-                std::cout << "Enter search term: ";
-                getline(std::cin, searchTerm);
+                cout << "Enter search term: ";
+                getline(cin, searchTerm);
 
-                std::cout << "SAFE QUERY - Using Parameterized Statements\n";
-                std::cout << "---------------------------------------\n";
+                cout << "SAFE QUERY - Using Parameterized Statements\n";
+                cout << "---------------------------------------\n";
 
-                // Allocate statement handle
-                SQLAllocHandle(SQL_HANDLE_STMT, dbc, &localStmt);
-
-                // Create a clean initialized buffer for safeQuery
-                std::wstring tempSafeQuery = L"SELECT user_id, username, email, role FROM users WHERE username LIKE ? OR email LIKE ?";
-                safeQuery = new SQLWCHAR[tempSafeQuery.length() + 1];
-                wcscpy_s(safeQuery, tempSafeQuery.length() + 1, tempSafeQuery.c_str());
-
-                // Prepare parameterized query
-                SQLPrepareW(localStmt, safeQuery, SQL_NTS);
+                // Create parameterized query
+                string paramQueryStr = "SELECT user_id, username, email, role FROM users WHERE username LIKE ? OR email LIKE ?";
 
                 // Create parameter values with wildcards
-                param = "%" + searchTerm + "%";
-                wParam = std::wstring(param.begin(), param.end());
+                map<int, string> params;
+                params[1] = "%" + searchTerm + "%";
 
-                // Bind parameters
-                SQLBindParameter(localStmt, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
-                    wParam.length(), 0, (SQLPOINTER)wParam.c_str(), 0, NULL);
-                SQLBindParameter(localStmt, 2, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
-                    wParam.length(), 0, (SQLPOINTER)wParam.c_str(), 0, NULL);
-
-                std::cout << "Executing parameterized query with search term: '" << searchTerm << "'\n\n";
-
-                // Execute the query
-                ret = SQLExecute(localStmt);
-
-                if (SQL_SUCCEEDED(ret)) {
-                    showUserData(localStmt);
-                }
-                else {
-                    displaySQLError(localStmt, SQL_HANDLE_STMT);
-                }
-
-                // Clean up
-                delete[] safeQuery;
-                SQLFreeHandle(SQL_HANDLE_STMT, localStmt);
+                // Execute secure query
+                showUserData(executeSecureQuery(paramQueryStr, params));
             }
             break;
 
             case 3: // Run demonstration of vulnerable queries
-                runVulnerableQuery(dbc);
+                runVulnerableQuery();
                 break;
 
             case 4: // Run demonstration of secure queries
-                runSecureQuery(dbc);
+                runSecureQuery();
                 break;
 
             case 5: // Exit
-                std::cout << "Logging out...\n";
+                cout << "Logging out...\n";
                 break;
 
             default:
-                std::cout << "Invalid choice. Please try again.\n";
+                cout << "Invalid choice. Please try again.\n";
             }
 
             if (choice != 5) {
-                std::cout << "\nPress Enter to continue...";
-                std::cin.get();
+                cout << "\nPress Enter to continue...";
+                cin.get();
             }
         }
     }
     else {
-        std::cout << "Maximum login attempts exceeded. Exiting.\n";
+        cout << "Maximum login attempts exceeded. Exiting.\n";
     }
 
-    // Clean up resources
-    std::cout << "Disconnecting from database...\n";
-    SQLDisconnect(dbc);
-    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
-    SQLFreeHandle(SQL_HANDLE_ENV, env);
-
-    std::cout << "Program terminated.\n";
+    cout << "Program terminated.\n";
     return 0;
 }
 
-// Display ODBC error messages
-void displaySQLError(SQLHANDLE handle, SQLSMALLINT type) {
-    SQLWCHAR sqlState[6];
-    SQLINTEGER nativeError;
-    SQLWCHAR messageText[SQL_MAX_MESSAGE_LENGTH];
-    SQLSMALLINT textLength;
-
-    std::cout << "SQL Error Details:\n";
-
-    while (SQLGetDiagRecW(type, handle, 1, sqlState, &nativeError,
-        messageText, sizeof(messageText) / sizeof(SQLWCHAR), &textLength) == SQL_SUCCESS) {
-        std::wcout << L"  SQLSTATE: " << sqlState << std::endl;
-        std::wcout << L"  Native Error: " << nativeError << std::endl;
-        std::wcout << L"  Message: " << messageText << std::endl;
-    }
-}
-
 // Log login attempts
-bool logAttempt(const std::string& username, bool success, const std::string& errorMsg) {
+bool logAttempt(const string& username, bool success, const string& errorMsg) {
     // Get current time
     time_t now = time(0);
     struct tm timeinfo;
@@ -325,232 +316,187 @@ bool logAttempt(const std::string& username, bool success, const std::string& er
     strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &timeinfo);
 
     // Open log file
-    std::ofstream logFile("auth_log.txt", std::ios::app);
+    ofstream logFile("auth_log.txt", ios::app);
     if (!logFile.is_open()) {
-        std::cerr << "Failed to open log file.\n";
+        cerr << "Failed to open log file.\n";
         return false;
     }
 
     // Write log entry
-    logFile << timestamp << " | User: " << std::setw(15) << std::left << username
+    logFile << timestamp << " | User: " << setw(15) << left << username
         << " | Status: " << (success ? "SUCCESS" : "FAILURE");
 
     if (!errorMsg.empty()) {
         logFile << " | Error: " << errorMsg;
     }
 
-    logFile << std::endl;
+    logFile << endl;
     logFile.close();
     return true;
 }
 
 // Display formatted user data from query results
-void showUserData(SQLHSTMT stmt) {
-    SQLWCHAR userId[10], username[50], email[100], role[20];
-    SQLLEN lenUserId, lenUsername, lenEmail, lenRole;
-
-    // Bind result columns
-    SQLBindCol(stmt, 1, SQL_C_WCHAR, userId, sizeof(userId), &lenUserId);
-    SQLBindCol(stmt, 2, SQL_C_WCHAR, username, sizeof(username), &lenUsername);
-    SQLBindCol(stmt, 3, SQL_C_WCHAR, email, sizeof(email), &lenEmail);
-    SQLBindCol(stmt, 4, SQL_C_WCHAR, role, sizeof(role), &lenRole);
-
+void showUserData(const vector<User>& results) {
     // Print table header
-    std::cout << std::setw(10) << std::left << "USER ID"
-        << std::setw(20) << std::left << "USERNAME"
-        << std::setw(30) << std::left << "EMAIL"
-        << std::setw(15) << std::left << "ROLE" << std::endl;
-    std::cout << std::string(75, '-') << std::endl;
+    cout << setw(10) << left << "USER ID"
+        << setw(20) << left << "USERNAME"
+        << setw(30) << left << "EMAIL"
+        << setw(15) << left << "ROLE" << endl;
+    cout << string(75, '-') << endl;
 
-    // Fetch and display rows
-    int rowCount = 0;
-    while (SQL_SUCCESS == SQLFetch(stmt)) {
-        std::wcout << std::setw(10) << std::left << userId
-            << std::setw(20) << std::left << username
-            << std::setw(30) << std::left << email
-            << std::setw(15) << std::left << role << std::endl;
-        rowCount++;
+    // Display rows
+    for (const auto& user : results) {
+        cout << setw(10) << left << user.user_id
+            << setw(20) << left << user.username
+            << setw(30) << left << user.email
+            << setw(15) << left << user.role << endl;
     }
 
-    std::cout << std::string(75, '-') << std::endl;
-    std::cout << rowCount << " record(s) found.\n";
+    cout << string(75, '-') << endl;
+    cout << results.size() << " record(s) found.\n";
 }
 
 // Display the main menu options
 void displayMenu() {
-    std::cout << "\n=================================================\n";
-    std::cout << "                   MAIN MENU                     \n";
-    std::cout << "=================================================\n";
-    std::cout << "1. Search users (vulnerable to SQL injection)\n";
-    std::cout << "2. Search users (safe parameterized query)\n";
-    std::cout << "3. Run SQL injection vulnerability demonstrations\n";
-    std::cout << "4. Run secure query examples\n";
-    std::cout << "5. Exit\n";
-    std::cout << "-------------------------------------------------\n";
+    cout << "\n=================================================\n";
+    cout << "                   MAIN MENU                     \n";
+    cout << "=================================================\n";
+    cout << "1. Search users (vulnerable to SQL injection)\n";
+    cout << "2. Search users (safe parameterized query)\n";
+    cout << "3. Run SQL injection vulnerability demonstrations\n";
+    cout << "4. Run secure query examples\n";
+    cout << "5. Exit\n";
+    cout << "-------------------------------------------------\n";
 }
 
 // Run demonstration of various SQL injection vulnerabilities
-void runVulnerableQuery(SQLHDBC dbc) {
-    SQLHSTMT stmt;
-    SQLRETURN ret;
-
-    std::cout << "\n=================================================\n";
-    std::cout << "       SQL INJECTION VULNERABILITY EXAMPLES       \n";
-    std::cout << "=================================================\n";
+void runVulnerableQuery() {
+    cout << "\n=================================================\n";
+    cout << "       SQL INJECTION VULNERABILITY EXAMPLES       \n";
+    cout << "=================================================\n";
 
     // Example 1: Authentication bypass
-    std::cout << "Example 1: Authentication Bypass\n";
-    std::cout << "-------------------------------------------------\n";
-    std::cout << "Vulnerable Code:\n";
-    std::cout << "   query = \"SELECT * FROM users WHERE username = '\" + username + \"' AND password = '\" + password + \"'\"\n\n";
-    std::cout << "Attack Input: username = admin' --\n";
-    std::cout << "               password = anything\n\n";
-    std::cout << "Resulting Query:\n";
-    std::cout << "   SELECT * FROM users WHERE username = 'admin' --' AND password = 'anything'\n\n";
-    std::cout << "Effect: The -- comments out the password check, allowing login as admin\n";
-    std::cout << "-------------------------------------------------\n\n";
+    cout << "Example 1: Authentication Bypass\n";
+    cout << "-------------------------------------------------\n";
+    cout << "Vulnerable Code:\n";
+    cout << "   query = \"SELECT * FROM users WHERE username = '\" + username + \"' AND password = '\" + password + \"'\"\n\n";
+    cout << "Attack Input: username = admin' --\n";
+    cout << "               password = anything\n\n";
+    cout << "Resulting Query:\n";
+    cout << "   SELECT * FROM users WHERE username = 'admin' --' AND password = 'anything'\n\n";
+    cout << "Effect: The -- comments out the password check, allowing login as admin\n";
+    cout << "-------------------------------------------------\n\n";
 
     // Example 2: UNION-based attack
-    std::cout << "Example 2: UNION-based Attack\n";
-    std::cout << "-------------------------------------------------\n";
-    std::cout << "Vulnerable Code:\n";
-    std::cout << "   query = \"SELECT name, description FROM products WHERE id = \" + productId\n\n";
-    std::cout << "Attack Input: productId = 1 UNION SELECT username, password FROM users --\n\n";
-    std::cout << "Resulting Query:\n";
-    std::cout << "   SELECT name, description FROM products WHERE id = 1 UNION SELECT username, password FROM users --\n\n";
-    std::cout << "Effect: Returns product data combined with all usernames and passwords\n";
-    std::cout << "-------------------------------------------------\n\n";
+    cout << "Example 2: UNION-based Attack\n";
+    cout << "-------------------------------------------------\n";
+    cout << "Vulnerable Code:\n";
+    cout << "   query = \"SELECT name, description FROM products WHERE id = \" + productId\n\n";
+    cout << "Attack Input: productId = 1 UNION SELECT username, password FROM users --\n\n";
+    cout << "Resulting Query:\n";
+    cout << "   SELECT name, description FROM products WHERE id = 1 UNION SELECT username, password FROM users --\n\n";
+    cout << "Effect: Returns product data combined with all usernames and passwords\n";
+    cout << "-------------------------------------------------\n\n";
 
     // Live demonstration
-    std::cout << "Would you like to run a simulated attack? (y/n): ";
+    cout << "Would you like to run a simulated attack? (y/n): ";
     char choice;
-    std::cin >> choice;
-    std::cin.ignore();
+    cin >> choice;
+    cin.ignore();
 
     if (choice == 'y' || choice == 'Y') {
-        SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
+        string attackInput = "x' OR '1'='1";
+        string queryStr = "SELECT user_id, username, email, role FROM users WHERE username LIKE '%" + attackInput + "%'";
 
-        std::string attackInput = "x' OR '1'='1";
-        std::string queryStr = "SELECT user_id, username, email, role FROM users WHERE username LIKE '%" + attackInput + "%'";
+        cout << "\nExecuting attack query: " << queryStr << endl << endl;
 
-        std::cout << "\nExecuting attack query: " << queryStr << std::endl << std::endl;
+        vector<User> results = executeVulnerableQuery(queryStr);
 
-        // Convert to wide string
-        std::wstring wAttackQuery(queryStr.begin(), queryStr.end());
-
-        ret = SQLExecDirectW(stmt, const_cast<SQLWCHAR*>(wAttackQuery.c_str()), SQL_NTS);
-
-        if (SQL_SUCCEEDED(ret)) {
-            std::cout << "Attack successful! Displaying all users regardless of search term:\n\n";
-            showUserData(stmt);
+        if (!results.empty()) {
+            cout << "Attack successful! Displaying all users regardless of search term:\n\n";
+            showUserData(results);
         }
         else {
-            std::cout << "Attack simulation failed (database may be protected):\n";
-            displaySQLError(stmt, SQL_HANDLE_STMT);
+            cout << "Attack simulation failed.\n";
         }
-
-        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
     }
 }
 
 // Run demonstration of secure queries
-void runSecureQuery(SQLHDBC dbc) {
-    SQLHSTMT stmt = SQL_NULL_HSTMT;
-    SQLRETURN ret;
-
-    std::cout << "\n=================================================\n";
-    std::cout << "            SECURE QUERY EXAMPLES                \n";
-    std::cout << "=================================================\n";
+void runSecureQuery() {
+    cout << "\n=================================================\n";
+    cout << "            SECURE QUERY EXAMPLES                \n";
+    cout << "=================================================\n";
 
     // Example 1: Parameterized queries
-    std::cout << "Example 1: Parameterized Queries\n";
-    std::cout << "-------------------------------------------------\n";
-    std::cout << "Secure Code:\n";
-    std::cout << "   query = \"SELECT * FROM users WHERE username = ? AND password = ?\"\n";
-    std::cout << "   SQLPrepare(stmt, query, SQL_NTS);\n";
-    std::cout << "   SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR, 0, 0, username, 0, NULL);\n";
-    std::cout << "   SQLBindParameter(stmt, 2, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR, 0, 0, password, 0, NULL);\n";
-    std::cout << "   SQLExecute(stmt);\n\n";
-    std::cout << "Effect: Even if username contains SQL injection attempts like \"admin' --\",\n";
-    std::cout << "        it will be treated as a literal string, not as SQL code.\n";
-    std::cout << "-------------------------------------------------\n\n";
+    cout << "Example 1: Parameterized Queries\n";
+    cout << "-------------------------------------------------\n";
+    cout << "Secure Code:\n";
+    cout << "   query = \"SELECT * FROM users WHERE username = ? AND password = ?\"\n";
+    cout << "   SQLPrepare(stmt, query, SQL_NTS);\n";
+    cout << "   SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR, 0, 0, username, 0, NULL);\n";
+    cout << "   SQLBindParameter(stmt, 2, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR, 0, 0, password, 0, NULL);\n";
+    cout << "   SQLExecute(stmt);\n\n";
+    cout << "Effect: Even if username contains SQL injection attempts like \"admin' --\",\n";
+    cout << "        it will be treated as a literal string, not as SQL code.\n";
+    cout << "-------------------------------------------------\n\n";
 
     // Example 2: Input validation
-    std::cout << "Example 2: Input Validation\n";
-    std::cout << "-------------------------------------------------\n";
-    std::cout << "Secure Code:\n";
-    std::cout << "   if(!validateInput(username) || !validateInput(password)) {\n";
-    std::cout << "       return ERROR_INVALID_INPUT;\n";
-    std::cout << "   }\n\n";
-    std::cout << "Effect: Reject inputs containing suspicious characters (', \", --, etc.)\n";
-    std::cout << "-------------------------------------------------\n\n";
+    cout << "Example 2: Input Validation\n";
+    cout << "-------------------------------------------------\n";
+    cout << "Secure Code:\n";
+    cout << "   if(!validateInput(username) || !validateInput(password)) {\n";
+    cout << "       return ERROR_INVALID_INPUT;\n";
+    cout << "   }\n\n";
+    cout << "Effect: Reject inputs containing suspicious characters (', \", --, etc.)\n";
+    cout << "-------------------------------------------------\n\n";
 
     // Live demonstration
-    std::cout << "Would you like to run a parameterized query demonstration? (y/n): ";
+    cout << "Would you like to run a parameterized query demonstration? (y/n): ";
     char choice;
-    std::cin >> choice;
-    std::cin.ignore();
+    cin >> choice;
+    cin.ignore();
 
     if (choice == 'y' || choice == 'Y') {
-        // Allocate a new handle
-        SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
+        string searchTerm = "admin' OR '1'='1";
+        cout << "\nSearching for malicious term: " << searchTerm << endl;
 
-        std::string searchTerm = "admin' OR '1'='1";
-        std::cout << "\nSearching for malicious term: " << searchTerm << std::endl;
+        // Create parameterized query
+        string paramQueryStr = "SELECT user_id, username, email, role FROM users WHERE username LIKE ?";
 
-        // Use a C++ std::wstring to avoid array initialization issues
-        std::wstring tempQuery = L"SELECT user_id, username, email, role FROM users WHERE username LIKE ?";
+        // Create parameter map
+        map<int, string> params;
+        params[1] = "%" + searchTerm + "%";
 
-        // Dynamically allocate memory for the query string
-        SQLWCHAR* safeQuery = new SQLWCHAR[tempQuery.length() + 1];
-        wcscpy_s(safeQuery, tempQuery.length() + 1, tempQuery.c_str());
+        cout << "Executing parameterized query with search term treated as literal string\n\n";
 
-        // Prepare parameterized query
-        SQLPrepareW(stmt, safeQuery, SQL_NTS);
+        // Execute secure query
+        vector<User> results = executeSecureQuery(paramQueryStr, params);
 
-        // Create parameter value with wildcards
-        std::string param = "%" + searchTerm + "%";
-        std::wstring wParam(param.begin(), param.end());
-
-        // Bind parameter
-        SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
-            wParam.length(), 0, (SQLPOINTER)wParam.c_str(), 0, NULL);
-
-        std::cout << "Executing parameterized query with search term treated as literal string\n\n";
-
-        // Execute the query
-        ret = SQLExecute(stmt);
-
-        if (SQL_SUCCEEDED(ret)) {
-            std::cout << "Query executed safely. Results:\n\n";
-            showUserData(stmt);
-            std::cout << "\nNotice how the injection attempt was treated as a literal string,\n";
-            std::cout << "not as SQL code, preventing the attack.\n";
+        if (!results.empty()) {
+            cout << "Query executed safely. Results:\n\n";
+            showUserData(results);
+            cout << "\nNotice how the injection attempt was treated as a literal string,\n";
+            cout << "not as SQL code, preventing the attack.\n";
         }
         else {
-            displaySQLError(stmt, SQL_HANDLE_STMT);
+            cout << "No results found for literal search term \"" << searchTerm << "\"\n";
+            cout << "This demonstrates how parameterized queries protect against SQL injection.\n";
         }
-
-        // Clean up resources
-        delete[] safeQuery;
-        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
     }
 }
 
 // Simple input validation function
-bool validateInput(const std::string& input) {
+bool validateInput(const string& input) {
     // Check for common SQL injection characters/strings
-    std::vector<std::string> blacklist = {
+    vector<string> blacklist = {
         "'", "\"", ";", "--", "/*", "*/", "@@", "@",
         "char", "nchar", "varchar", "exec",
         "execute", "sp_", "xp_", "sysobjects", "syscolumns"
     };
 
     for (const auto& item : blacklist) {
-        if (input.find(item) != std::string::npos) {
-            return false;
-        }
-    }
-
+        if (input.find(item) != string::npos) {
+            return false;}    }
     return true;
 }
